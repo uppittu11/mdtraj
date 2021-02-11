@@ -38,10 +38,10 @@ def load_hoomdxml(filename, top=None):
     For more information on this file format, see:
     http://codeblue.umich.edu/hoomd-blue/doc/page_xml_file_format.html
     Notably, all node names and attributes are in all lower case.
-    HOOMD-Blue does not contain residue and chain information explicitly. 
-    For this reason, chains will be found by looping over all the bonds and 
-    finding what is bonded to what. 
-    Each chain consisists of exactly one residue. 
+    HOOMD-Blue does not contain residue and chain information explicitly.
+    For this reason, chains will be found by looping over all the bonds and
+    finding what is bonded to what.
+    Each chain consisists of exactly one residue.
 
     Parameters
     ----------
@@ -53,7 +53,7 @@ def load_hoomdxml(filename, top=None):
     Returns
     -------
     trajectory : md.Trajectory
-        The resulting trajectory, as an md.Trajectory object, with corresponding 
+        The resulting trajectory, as an md.Trajectory object, with corresponding
         Topology.
 
     Notes
@@ -87,25 +87,40 @@ def load_hoomdxml(filename, top=None):
                                   [0.0, ly,    yz*lz],
                                   [0.0, 0.0,   lz   ]]])
 
-    positions, types = [], {}
+    positions, types = [], []
     for pos in position.text.splitlines()[1:]:
         positions.append((float(pos.split()[0]),
                           float(pos.split()[1]),
                           float(pos.split()[2])))
 
-    for idx, atom_name in enumerate(atom_type.text.splitlines()[1:]):
-        types[idx] = str(atom_name.split()[0])
+    for atom_name in atom_type.text.splitlines()[1:]:
+        types.append(str(atom_name.split()[0]))
+
     if len(types) != len(positions):
         raise ValueError('Different number of types and positions in xml file')
 
     # ignore the bond type
     if hasattr(bond, 'text'):
         bonds = [(int(b.split()[1]), int(b.split()[2])) for b in bond.text.splitlines()[1:]]
-        chains = _find_chains(bonds)
+        chains = _find_chains(len(types), bonds)
     else:
         chains = []
         bonds = []
 
+    # make a list of residue objects and map each atom to it's residue
+    atom_to_residue = np.zeros(len(types), dtype=int)-1
+    t_residues = []
+    for res_idx, chain in enumerate(chains):
+        t_chain = topology.add_chain()
+        t_residue = topology.add_residue("A", t_chain)
+        t_residues.append(t_residue)
+        for atom in chain:
+            atom_to_residue[atom] = res_idx
+    assert (not np.any(atom_to_residue < 0)), "Mismatch in number of atoms and bond indices"
+
+    for a_type, a_idx in zip(types, atom_to_residue):
+        topology.add_atom(a_type, virtual_site, t_residues[a_idx])
+    """
     # Relate the first index in the bonded-group to mdtraj.Residue
     bonded_to_residue = {}
     for i, _ in enumerate(types):
@@ -115,12 +130,13 @@ def load_hoomdxml(filename, top=None):
                 t_chain = topology.add_chain()
                 t_residue = topology.add_residue('A', t_chain)
                 bonded_to_residue[bonded_group[0]] = t_residue
-            topology.add_atom(types[i], virtual_site, 
+            topology.add_atom(types[i], virtual_site,
                     bonded_to_residue[bonded_group[0]])
         if bonded_group is None:
             t_chain = topology.add_chain()
             t_residue = topology.add_residue('A', t_chain)
             topology.add_atom(types[i], virtual_site, t_residue)
+    """
 
     for bond in bonds:
         atom1, atom2 = bond[0], bond[1]
@@ -131,11 +147,11 @@ def load_hoomdxml(filename, top=None):
 
     return traj
 
-def _find_chains(bond_list):
+def _find_chains(n_atoms, bond_list):
     """Given a set of bonds, find unique molecules, with the assumption that
     there are no bonds between separate chains (i.e., only INTRAmolecular
     bonds), which also implies that each atom can be in exactly one chain.
-    
+
     Parameters
     ----------
     bond_list : list of (int, int)
@@ -154,6 +170,8 @@ def _find_chains(bond_list):
     chains = []
     bond_list = np.asarray(bond_list)
     molecules = nx.Graph()
+    for i in range(n_atoms):
+        molecules.add_node(i)
     molecules.add_nodes_from(set(bond_list.flatten()))
     molecules.add_edges_from(bond_list)
     return [sorted(x) for x in list(nx.connected_components(molecules))]
